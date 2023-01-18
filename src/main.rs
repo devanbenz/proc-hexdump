@@ -1,13 +1,22 @@
-use std::{io::IoSliceMut, path::Path, ffi::OsStr, collections::{HashMap, BTreeMap}};
+use std::{io::IoSliceMut, ffi::OsStr, collections::BTreeMap};
 
+use clap::Parser;
 use proc_maps::get_process_maps;
 use sysinfo::{ProcessExt, System, SystemExt, PidExt};
 use nix::{sys::uio::{RemoteIoVec, process_vm_readv}, unistd::Pid};
 
 const BUFFER_SIZE: usize = 16;
 
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    #[arg(short, long)]
+    process_name: String
+}
+
+
 fn read_bytes_from_process(pid: Pid, mut base_address: usize, page_size: usize) {
-    for _ in (0..page_size).step_by(BUFFER_SIZE) {
+    for _ in (0..=page_size).step_by(BUFFER_SIZE) {
         let mut data = [0u8; BUFFER_SIZE];
         let local_iov = IoSliceMut::new(&mut data);
         let remote_iov = RemoteIoVec {
@@ -36,13 +45,13 @@ fn get_process_id_by_name(process_name: &str) -> u32 {
     process.pid().as_u32()
 }
 
-fn get_virtual_memory_mapping(pid: u32) -> BTreeMap<usize, usize> {
+fn get_virtual_memory_mapping(pid: u32, process_name: &str) -> BTreeMap<usize, usize> {
     let mut addresses = BTreeMap::new();
     let maps = get_process_maps(pid as i32).expect("cannot find virtual memory pages for process");
     for map in maps {
         match map.filename() {
             Some(val) => {
-                if val.file_stem() == Some(OsStr::new("sleep")) {
+                if val.file_stem() == Some(OsStr::new(process_name)) {
                     addresses.insert(map.start(), map.size());
                 }
             },
@@ -53,11 +62,11 @@ fn get_virtual_memory_mapping(pid: u32) -> BTreeMap<usize, usize> {
 }
 
 fn main() {
-    let raw_pid = get_process_id_by_name("sleep");
-    let virt_mem_maps = get_virtual_memory_mapping(raw_pid);
+    let args = Args::parse();
+    let raw_pid = get_process_id_by_name(args.process_name.as_str());
+    let virt_mem_maps = get_virtual_memory_mapping(raw_pid, args.process_name.as_str());
     let pid = Pid::from_raw(raw_pid as i32);
     for (memory_addr, page_size) in virt_mem_maps {
-        // read_bytes_from_process(pid, memory_addr, page_size);
-        println!("{:08x}-{:08x}", memory_addr, memory_addr + page_size);
+        read_bytes_from_process(pid, memory_addr, page_size);
     }
 }
